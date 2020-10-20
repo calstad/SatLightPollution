@@ -10,6 +10,9 @@
 
 #define _SILENCE_EXPERIMENTAL_FILESYSTEM_DEPRECATION_WARNING
 
+#include <safe_lib.h>
+#include <windows.h>
+
 #include <iostream>
 #include <limits>
 #include <ctime>
