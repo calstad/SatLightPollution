@@ -570,7 +570,7 @@ void read_TLE(
 	char cospar_piece[4];
 	sprintf_s(cospar_launch, "%s", "");
 	sprintf_s(cospar_piece, "%s", "");
-	sscanf_s(longstr1, "%*9c%2d%3c%3c", &cospar_year, cospar_launch, cospar_piece);
+	sscanf(longstr1, "%*9c%2d%3c%3c", &cospar_year, cospar_launch, cospar_piece);
 	cospar_launch[3] = '\0';
 	cospar_piece[3] = '\0';
 	for (int i = 0; i < 4; i++)
@@ -619,12 +619,12 @@ void read_TLE(
 
 	//longstr1[69] = '\0';
 
-	sscanf_s(longstr1, "%2d %5ld %*11c %2d %12lf %11lf %7lf %2d %7lf %2d %2d %6ld",	
+	sscanf(longstr1, "%2d %5ld %*11c %2d %12lf %11lf %7lf %2d %7lf %2d %2d %6ld",
 		&cardnumb, &satnum, &epochyr,
 		&epochdays, &ndot, &nddot, &nexp, &bstar,
 		&ibexp, &numb, &elnum);
 
-	sscanf_s(longstr2, "%2d %5ld %9lf %9lf %8lf %9lf %9lf %11lf %6ld \n",
+	sscanf(longstr2, "%2d %5ld %9lf %9lf %8lf %9lf %9lf %11lf %6ld \n",
 		&cardnumb, &satnum, &inclo,
 		&nodeo, &ecco, &argpo, &mo, &no,
 		&revnum);
