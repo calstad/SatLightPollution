@@ -12,6 +12,7 @@
 
 #include <safe_lib.h>
 #include <windows.h>
+#include <argparse.hpp>
 
 #include <iostream>
 #include <limits>
@@ -304,48 +305,110 @@ const double AU_to_m = 149597870700.;//1 AU [m]
 
 int main(int argc, const char *argv[])
 {
-	printf("\nSatellite Light Pollution\n");
+        // Setup argument parser
+        argparse::ArgumentParser program("light pollution prediction");
+        // File IO
+        program.add_argument("--tle-file")
+          .help("path to file containing TLEs")
+          .required();
+        program.add_argument("--out")
+          .help("path to write results to")
+          .default_value(std::string("out.txt"));
+        // Prediction window
+        program.add_argument("--pred-start")
+          .help("prediction window start date as `year month day hour minute` in (UTC)")
+          .default_value(std::vector<int>{2020, 1, 1, 0, 0})
+          .action([](const std::string& value) { return std::stoi(value); });
+        program.add_argument("--pred-end")
+          .help("prediction window end date as `year month day hour minute` in (UTC)")
+          .default_value(std::vector<int>{2020, 1, 1, 1, 0})
+          .action([](const std::string& value) { return std::stoi(value); });
+        program.add_argument("--pred-search-step")
+          .help("time step increment to propagate orbits for")
+          .default_value(double(0.1))
+          .action([](const std::string& value) { return std::stod(value); });
+        // Where the observatory is
+        program.add_argument("--obs-coords")
+          .help("Cartesian coordinates (x, y, z) for the observatory in the WGS84 reference system")
+          .nargs(3)
+          .default_value(std::vector<double>{-1330021.0, -5328401.8, 3236480.7})
+          .action([](const std::string& value) { return std::stod(value); });
+        program.add_argument("--obs-lng-lat")
+          .help("longitude and latitude longitude as east-north for the observatory")
+          .nargs(2)
+          .default_value(std::vector<double>{255.9848, 30.6802})
+          .action([](const std::string& value) { return std::stod(value); });
+        // Observatory Field of View
+        program.add_argument("--fov-az")
+          .help("telescope pointing azimuth in the horizontal system")
+          .default_value(double(30.0))
+          .action([](const std::string& value) { return std::stod(value); });
+        program.add_argument("--fov-elev")
+          .help("telescope elevation above the horizon in the horizontal system")
+          .default_value(double(60.0))
+          .action([](const std::string& value) { return std::stod(value); });
+        // Parse arguments
+        try {
+          program.parse_args(argc, argv);
+        }
+        catch (const std::runtime_error& err) {
+          std::cout << err.what() << std::endl;
+          std::cout << program;
+          exit(0);
+        }
 
+        printf("\nSatellite Light Pollution\n");
 	std::vector <str_tle> tle;
 	tle.resize(0);
 
 	char TLE_filepath[MAX_PATH];
-	sprintf_s(TLE_filepath, "%s", "");
-	sprintf_s(TLE_filepath, "%s", "C:\\Predictions\\3le.txt");
-
+        strcpy(TLE_filepath, program.get<std::string>("--tle-file").c_str());
 	read_TLE_catalogue(TLE_filepath, &tle);
 	
 	//time span to test
-	double MJD_start_UTC = MJD_full(2020, 10, 15, 0, 0, 0);	
-	double MJD_stop_UTC = MJD_full(2020, 10, 15, 1, 0, 0);
+        auto pred_start = program.get<std::vector<int>>("--pred-start");
+        auto pred_end = program.get<std::vector<int>>("--pred-end");
+	double MJD_start_UTC = MJD_full(pred_start.at(0),
+                                        pred_start.at(1),
+                                        pred_start.at(2),
+                                        pred_start.at(3),
+                                        pred_start.at(4),
+                                        0);
+	double MJD_stop_UTC = MJD_full(pred_end.at(0),
+                                        pred_end.at(1),
+                                        pred_end.at(2),
+                                        pred_end.at(3),
+                                        pred_end.at(4),
+                                        0);
 	double search_step_s = 0.1;
 	double search_step_day = search_step_s / 86400.;
 
 	//Observer location, Terrestrial system, ITRF
-	//McDonald Observatory
-	//https://ilrs.cddis.eosdis.nasa.gov/network/stations/active/MDOL_general.html		
 	v3 Station_TCS_m;//WGS84
-	ae Station_TCS_rad;//East-North	
-	Station_TCS_m.x = -1330021.0;
-	Station_TCS_m.y = -5328401.8;
-	Station_TCS_m.z = 3236480.7;	
-	Station_TCS_rad.az = 255.9848*deg2rad;
-	Station_TCS_rad.el = 30.6802*deg2rad;
-
+	ae Station_TCS_rad;//East-North
+        auto Station_coords = program.get<std::vector<double>>("--obs-coords");
+        Station_TCS_m.x = Station_coords.at(0);
+	Station_TCS_m.y = Station_coords.at(1);
+	Station_TCS_m.z = Station_coords.at(2);
+        auto Station_lng_lat = program.get<std::vector<double>>("--obs-lng-lat");
+        Station_TCS_rad.az = Station_lng_lat.at(0)*deg2rad;
+        Station_TCS_rad.el = Station_lng_lat.at(1)*deg2rad;
+   
 	//FOV topocentric orientation; telescope pointing direction in horizontal system
 	ae FOV_topo_rad;
-	FOV_topo_rad.az = 30.*deg2rad;//azimuth
-	FOV_topo_rad.el = 60.*deg2rad;//elevation above horizon
+        auto fov_az = program.get<double>("--fov-az");
+        auto fov_elev = program.get<double>("--fov-elev");
+	FOV_topo_rad.az = fov_az*deg2rad;//azimuth
+	FOV_topo_rad.el = fov_elev*deg2rad;//elevation above horizon
 	double FOV_radius_rad = 1.*deg2rad;
 	v3 FOV_topo_uv = get_v3(FOV_topo_rad);
 
 	FILE *FFout;
 	errno_t err;
 	char OutFilename[MAX_PATH];
+        strcpy(OutFilename, program.get<std::string>("--out").c_str());
 	char txt_line[MAX_PATH];
 
-	sprintf_s(OutFilename, "%s", "");
-	sprintf_s(OutFilename, "%s_out.txt", TLE_filepath);
 	err = fopen_s(&FFout, OutFilename, "w");
 
 	sprintf_s(txt_line, "%s", "");
