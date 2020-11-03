@@ -291,6 +291,15 @@ double Distance_to_the_SUN_AU(double MJD);
 double shadow_function(double MJD, v3 Sat_ICS_m, v3 Sun_ICS_m);
 double sat_apparent_magnitude(v3 station_ICS_m, v3 sat_ICS_m, v3 sun_ICS_m);
 
+void sat_position_wrt_FOV_axis(
+	double FOV_topo_az_rad,//topocentric orientation of FOV axis, azimuth
+	double FOV_topo_el_rad,//topocentric orientation of FOV axis, elevaton
+	v3 sat_topo_uv,//
+	//output, rectangular coordinates of a satellite on the FOV frame
+	float *x_rad,//X is FOV horizontal axis (perpendicular to North direction)
+	float *y_rad//Y is FOV vertical axis with direction towards North (Up is North)
+);
+
 
 #define pi 3.14159265358979323846
 const double deg2rad = pi / 180.0;
@@ -346,9 +355,8 @@ int main(int argc, const char *argv[])
 	err = fopen_s(&FFout, OutFilename, "w");
 
 	sprintf_s(txt_line, "%s", "");
-	sprintf_s(txt_line, "time_s\tNORAD\tFOV_axis_distance_deg\tapp_mag");
+	sprintf_s(txt_line, "time_s\tNORAD\tapparent_magnitude\tFOV_axis_distance_deg\tPosition_wrt_FOV_Azimuth_deg\tPosition_wrt_FOV_Radius_deg");
 	fprintf(FFout, "%s\n", txt_line);
-
 	
 	for (int iSat = 0; iSat < tle.size(); iSat++)
 	{
@@ -395,13 +403,31 @@ int main(int argc, const char *argv[])
 												
 					if (ShadowFunction > 0.2)//satellite in sun
 					{
+						float sat_x_rad = 0., sat_y_rad = 0.;
+						sat_position_wrt_FOV_axis(
+							FOV_topo_rad.az,//topocentric orientation of FOV axis, azimuth
+							FOV_topo_rad.el,//topocentric orientation of FOV axis, elevaton
+							sat_topo_uv,							
+							//output, rectangular coordinates of a satellite on the FOV frame
+							&sat_x_rad,//X is FOV horizontal axis (perpendicular to North direction)
+							&sat_y_rad//Y is FOV vertical axis with direction towards North (Up is North)
+						);
+
 						v3 station_ICS_m = TCS_to_ICS * Station_TCS_m;
 						double sat_mag = sat_apparent_magnitude(station_ICS_m, sat_ICS_m, sun_ICS_m);
 
 						//add result
 						double time_s = (MJD - MJD_start_UTC)*86400.;
 						sprintf_s(txt_line, "%s", "");
-						sprintf_s(txt_line, "%.6lf\t%d\t%.6lf\t%.1lf", time_s, tle[iSat].NORAD, distance_rad*rad2deg, sat_mag);
+						sprintf_s(txt_line, "%.6lf\t%d\t%.1lf\t%.6lf\t%.6lf\t%.6lf",
+							time_s,
+							tle[iSat].NORAD,
+							sat_mag,
+							distance_rad * rad2deg,
+							sat_x_rad * rad2deg,
+							sat_y_rad * rad2deg
+						);
+
 						fprintf(FFout, "%s\n", txt_line);
 
 					}
@@ -3021,3 +3047,43 @@ double det(v33 M)
 
 	return D;
 }
+
+void sat_position_wrt_FOV_axis(
+	double FOV_topo_az_rad,//topocentric orientation of FOV axis, azimuth
+	double FOV_topo_el_rad,//topocentric orientation of FOV axis, elevaton
+	v3 sat_topo_uv,//
+	//output, rectangular coordinates of a satellite on the FOV frame
+	float *x_rad,//X is FOV horizontal axis (perpendicular to North direction)
+	float *y_rad//Y is FOV vertical axis with direction towards North (Up is North)
+)
+{
+	//FOV coordinates
+	float sinA = sin(FOV_topo_az_rad);
+	float cosA = cos(FOV_topo_az_rad);
+	float sinE = sin(FOV_topo_el_rad);
+	float cosE = cos(FOV_topo_el_rad);
+
+	//North vector wrt FOV axis
+	float RotBA_10 = -sinE * cosA;
+	float RotBA_11 = -sinE * sinA;
+	float RotBA_20 = cosE * cosA;
+	float RotBA_21 = cosE * sinA;
+	float rso_uv1_x = -sinA * sat_topo_uv.x + cosA * sat_topo_uv.y;
+	float rso_uv1_y = RotBA_10 * sat_topo_uv.x + RotBA_11 * sat_topo_uv.y + cosE * sat_topo_uv.z;
+	float rso_uv1_z = RotBA_20 * sat_topo_uv.x + RotBA_21 * sat_topo_uv.y + sinE * sat_topo_uv.z;
+	float North_rad1_az = atan2(RotBA_10, -sinA);
+	float sNorthAz = sinf(North_rad1_az);
+	float cNorthAz = cosf(North_rad1_az);
+	//XY derotation
+	float rso_uv2_x = cNorthAz * rso_uv1_x + sNorthAz * rso_uv1_y;
+	float rso_uv2_y = -sNorthAz * rso_uv1_x + cNorthAz * rso_uv1_y;
+	float rso_rad2_az = atan2(rso_uv2_y, rso_uv2_x);
+
+	//convert UV cooridnates to FOV frame rectangular coordinates
+	//X is FOV horizontal axis (perpendicular to North direction)
+	//Y is FOV vertical axis with direction towards North (Up is North)
+	float radius = tan(acos(rso_uv1_z));
+	*x_rad = radius * cosf(rso_rad2_az);//max is +-fov_radius_rad
+	*y_rad = radius * sinf(rso_rad2_az);//max is +-fov_radius_rad
+}
+
