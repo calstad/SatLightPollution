@@ -29,7 +29,7 @@ RUN cp /usr/include/x86_64-linux-gnu/sys/io.h /usr/include
 
 # Compile
 WORKDIR /app/SatLightPollution
-RUN g++ -o /usr/bin/slp -I . *.cpp -L /usr/local/lib -lsafec-3.6.0 -lstdc++fs
+RUN g++ -std=c++17 -o /usr/bin/slp -I . *.cpp -L /usr/local/lib -lsafec-3.6.0 -lstdc++fs
 
 CMD ["/bin/bash"]
 
