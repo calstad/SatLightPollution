@@ -17,6 +17,7 @@ RUN update-ca-certificates
 # that are not available in GCC
 RUN git clone https://github.com/rurban/safeclib.git
 WORKDIR safeclib
+RUN git reset --hard 0234bec46da4863f849f100c2f5336412ab2f69b
 
 RUN ./build-aux/autogen.sh && \
         ./configure && \
