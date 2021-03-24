@@ -42,8 +42,6 @@ app.layout = html.Div(children=[
                  'text-align': 'center'
              }),
 
-    dcc.Upload(children=html.Button('Upload Coords'), id='upload-data'),
-
     dcc.Graph(
         id='satellite-graph',
         figure=fig
