@@ -10,7 +10,9 @@ RUN apt-get update -qq && \
         gcc \
         make \
         git \
-        autotools-dev automake autoconf libtool libtext-diff-perl pkg-config
+        autotools-dev automake autoconf libtool libtext-diff-perl pkg-config \
+        python3 \
+        python3-pip
 RUN update-ca-certificates
 
 # Install implementations of Annex K functions used by the MS C/C++ compiler
@@ -32,5 +34,13 @@ RUN cp /usr/include/x86_64-linux-gnu/sys/io.h /usr/include
 WORKDIR /app/SatLightPollution
 RUN g++ -std=c++17 -o /usr/bin/slp -I . *.cpp -L /usr/local/lib -lsafec-3.6.0 -lstdc++fs
 
-CMD ["/bin/bash"]
+WORKDIR /dash
+COPY requirements.txt /dash/requirements.txt
+COPY app.py /dash/app.py
+COPY tle.txt /dash/tle.txt
+
+RUN pip3 install wheel
+RUN pip3 install -r requirements.txt
+
+CMD ["python3", "/dash/app.py"]
 
