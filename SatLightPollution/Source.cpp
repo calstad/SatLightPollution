@@ -132,10 +132,7 @@ typedef struct
 
 } elsetrec;
 
-void read_TLE_catalogue(
-	char *TLE_filepath,
-	std::vector <str_tle> *tle
-);
+void read_TLE_catalogue(std::string TLE_filepath, std::vector <str_tle>* tle);
 
 void read_TLE(
 	char *TLE_line1,//in
@@ -304,12 +301,55 @@ void sat_position_wrt_FOV_axis(
 	float *y_rad//Y is FOV vertical axis with direction towards North (Up is North)
 );
 
+v3 GiveColorScale_RGB(float ScaleMin, float ScaleMax, float Value);
+std::string timestamp_UTC_1ms(double MJD);
+
+void czml_line(
+	FILE* FFout,
+	double MJD0,
+	float az0_rad,
+	float el0_rad,
+	float altitude0_m,
+	double MJD1,
+	float az1_rad,
+	float el1_rad,
+	float altitude1_m,
+	std::string name,
+	float w01,
+	int point_ID,
+	int pixelsize
+);
+
+void czml_add_pass(
+	FILE* FFout,
+	str_tle* tle,
+	std::vector <double>* point_MJD,
+	std::vector <double>* point_az_rad,
+	std::vector <double>* point_el_rad,
+	std::vector <double>* point_altitude_m,
+	std::vector <double>* point_magnitude,
+	double scale_RSO_apparent_mag_max,
+	double scale_RSO_apparent_mag_min,
+	int* ipoint_counter
+);
+
+void date_and_time_from_MJD(
+	double MJD,
+	int* year,
+	int* month,
+	int* day,
+	int* hour,
+	int* minute,
+	int* isec,
+	double* sec_fraction
+);
 
 #define pi 3.14159265358979323846
 const double deg2rad = pi / 180.0;
 const double rad2deg = 180.0 / pi;
 double pi2 = 2.*pi;
 const double AU_to_m = 149597870700.;//1 AU [m]
+const double Earth_radius_m = 6378137.;
 
 
 int main(int argc, const char *argv[])
@@ -370,27 +410,38 @@ int main(int argc, const char *argv[])
 	std::vector <str_tle> tle;
 	tle.resize(0);
 
-	char TLE_filepath[MAX_PATH];
-        strcpy(TLE_filepath, program.get<std::string>("--tle-file").c_str());
+
+	// char TLE_filepath[MAX_PATH];
+        // strcpy(TLE_filepath, program.get<std::string>("--tle-file").c_str());
+	// read_TLE_catalogue(TLE_filepath, &tle);
+	
+	// //time span to test
+        // auto pred_start = program.get<std::vector<int>>("--pred-start");
+        // auto pred_end = program.get<std::vector<int>>("--pred-end");
+	// double MJD_start_UTC = MJD_full(pred_start.at(0),
+        //                                 pred_start.at(1),
+        //                                 pred_start.at(2),
+        //                                 pred_start.at(3),
+        //                                 pred_start.at(4),
+        //                                 0);
+	// double MJD_stop_UTC = MJD_full(pred_end.at(0),
+        //                                 pred_end.at(1),
+        //                                 pred_end.at(2),
+        //                                 pred_end.at(3),
+        //                                 pred_end.at(4),
+        //                                 0);
+	// double search_step_s = 0.1;
+	// double search_step_day = search_step_s / 86400.;
+
+	std::string TLE_filepath = "2021-06-16.tle";//full catalog, 3LE, space-trak.org
 	read_TLE_catalogue(TLE_filepath, &tle);
 	
 	//time span to test
-        auto pred_start = program.get<std::vector<int>>("--pred-start");
-        auto pred_end = program.get<std::vector<int>>("--pred-end");
-	double MJD_start_UTC = MJD_full(pred_start.at(0),
-                                        pred_start.at(1),
-                                        pred_start.at(2),
-                                        pred_start.at(3),
-                                        pred_start.at(4),
-                                        0);
-	double MJD_stop_UTC = MJD_full(pred_end.at(0),
-                                        pred_end.at(1),
-                                        pred_end.at(2),
-                                        pred_end.at(3),
-                                        pred_end.at(4),
-                                        0);
-	double search_step_s = 0.1;
-	double search_step_day = search_step_s / 86400.;
+	double MJD_start_UTC = MJD_full(2021, 6, 17, 0, 0, 0);	
+	double MJD_stop_UTC = MJD_start_UTC + 1. / 24.;//+ session duration
+	int search_step_ms = 100;
+	double search_step_day = double(search_step_ms) / 1000. / 86400.;
+	int save_step = int(1e3 / search_step_ms);//line duration, czml
 
 	//Observer location, Terrestrial system, ITRF
 	v3 Station_TCS_m;//WGS84
@@ -412,18 +463,38 @@ int main(int argc, const char *argv[])
 	double FOV_radius_rad = 1.*deg2rad;
 	v3 FOV_topo_uv = get_v3(FOV_topo_rad);
 
-	FILE *FFout;
+	FILE* FFout;
+	FILE* FFout_czml;
 	errno_t err;
 	char OutFilename[MAX_PATH];
-        strcpy(OutFilename, program.get<std::string>("--out").c_str());
+
+        // strcpy(OutFilename, program.get<std::string>("--out").c_str());
+	// char txt_line[MAX_PATH];
+
+
+	char OutFilename_czml[MAX_PATH];
 	char txt_line[MAX_PATH];
 
+	sprintf_s(OutFilename, "%s", "");
+	sprintf_s(OutFilename, "%s_out.txt", TLE_filepath.c_str());
+
 	err = fopen_s(&FFout, OutFilename, "w");
+
+	sprintf_s(OutFilename_czml, "%s", "");
+	sprintf_s(OutFilename_czml, "%s_out.czml", TLE_filepath.c_str());
+	err = fopen_s(&FFout_czml, OutFilename_czml, "w");
+	fprintf(FFout_czml, "[\n");
+	fprintf(FFout_czml, "{\"id\": \"document\",\"name\":\"Points\",\"version\":\"1.0\"}\n");
+	int ipoint_counter = 0;
+	
+	//color scale limits
+	double scale_RSO_apparent_mag_min = 4.;// 8.24;	
+	double scale_RSO_apparent_mag_max = 12.;//10	
 
 	sprintf_s(txt_line, "%s", "");
 	sprintf_s(txt_line, "time_s\tNORAD\tapparent_magnitude\tFOV_axis_distance_deg\tPosition_wrt_FOV_Azimuth_deg\tPosition_wrt_FOV_Radius_deg");
 	fprintf(FFout, "%s\n", txt_line);
-	
+
 	for (int iSat = 0; iSat < tle.size(); iSat++)
 	{
 		elsetrec tle_satrec;
@@ -435,6 +506,21 @@ int main(int argc, const char *argv[])
 		//4 - semi-latus rectum < 0.0
 		//5 - epoch elements are sub-orbital
 		//6 - satellite has decayed
+
+		int iStep = 0;
+
+		//czml points
+		std::vector <double> point_MJD;
+		std::vector <double> point_az_rad;
+		std::vector <double> point_el_rad;
+		std::vector <double> point_altitude_m;
+		std::vector <double> point_magnitude;
+
+		point_MJD.resize(0);
+		point_az_rad.resize(0);
+		point_el_rad.resize(0);
+		point_altitude_m.resize(0);
+		point_magnitude.resize(0);
 
 		for (double MJD = MJD_start_UTC; MJD <= MJD_stop_UTC; MJD += search_step_day)
 		{
@@ -450,66 +536,107 @@ int main(int argc, const char *argv[])
 			v33 TCS_to_ICS = inv(ICS_to_TCS);//Terrestrial to Inertial
 
 			v3 sat_TCS_m = ICS_to_TCS * sat_ICS_m;			
+			ae sat_TCS_rad = get_ae(sat_TCS_m);
 
 			ae sat_topo_rad = topo_AzEl_rad(Station_TCS_m, Station_TCS_rad, sat_TCS_m);//topocentric coordinates
 			v3 sat_topo_uv = get_v3(sat_topo_rad);
 
+			double sat_altitude_m = norm(sat_TCS_m) - Earth_radius_m;	
+
 			if (sat_topo_rad.el > 0.)//satellite above horizon
 			{
-				double distance_rad = IArad(FOV_topo_uv, sat_topo_uv);//FOV axis distance
+				//check for illumination			
+				ae sun_ICS_rad = Sun_ICS_rad(MJD);
+				double Sun_Earth_m = Distance_to_the_SUN_AU(MJD) * AU_to_m;
+				v3 sun_ICS_m = get_v3(sun_ICS_rad, Sun_Earth_m);
 
-				if (distance_rad <= FOV_radius_rad)//satellite within FOV
+				double ShadowFunction = shadow_function(MJD, sat_ICS_m, sun_ICS_m);
+
+				if (ShadowFunction > 0.2)//satellite in sun
 				{
-					//check for illumination			
-					ae sun_ICS_rad = Sun_ICS_rad(MJD);
-					double Sun_Earth_m = Distance_to_the_SUN_AU(MJD) * AU_to_m;
-					v3 sun_ICS_m = get_v3(sun_ICS_rad, Sun_Earth_m);
-														
-					double ShadowFunction = shadow_function(MJD, sat_ICS_m, sun_ICS_m);
-												
-					if (ShadowFunction > 0.2)//satellite in sun
-					{
-						float sat_x_rad = 0., sat_y_rad = 0.;
-						sat_position_wrt_FOV_axis(
-							FOV_topo_rad.az,//topocentric orientation of FOV axis, azimuth
-							FOV_topo_rad.el,//topocentric orientation of FOV axis, elevaton
-							sat_topo_uv,							
-							//output, rectangular coordinates of a satellite on the FOV frame
-							&sat_x_rad,//X is FOV horizontal axis (perpendicular to North direction)
-							&sat_y_rad//Y is FOV vertical axis with direction towards North (Up is North)
-						);
+					double distance_rad = IArad(FOV_topo_uv, sat_topo_uv);//FOV axis distance
 
+					if ((distance_rad <= FOV_radius_rad) ||//satellite within FOV, save output
+						(iStep % save_step == 0)//save for czml
+						)
+					{
 						v3 station_ICS_m = TCS_to_ICS * Station_TCS_m;
 						double sat_mag = sat_apparent_magnitude(station_ICS_m, sat_ICS_m, sun_ICS_m);
 
-						//add result
-						double time_s = (MJD - MJD_start_UTC)*86400.;
-						sprintf_s(txt_line, "%s", "");
-						sprintf_s(txt_line, "%.6lf\t%d\t%.1lf\t%.6lf\t%.6lf\t%.6lf",
-							time_s,
-							tle[iSat].NORAD,
-							sat_mag,
-							distance_rad * rad2deg,
-							sat_x_rad * rad2deg,
-							sat_y_rad * rad2deg
-						);
+						if (distance_rad <= FOV_radius_rad)
+						{
+							float sat_x_rad = 0., sat_y_rad = 0.;
+							sat_position_wrt_FOV_axis(
+								FOV_topo_rad.az,//topocentric orientation of FOV axis, azimuth
+								FOV_topo_rad.el,//topocentric orientation of FOV axis, elevaton
+								sat_topo_uv,
+								//output, rectangular coordinates of a satellite on the FOV frame
+								&sat_x_rad,//X is FOV horizontal axis (perpendicular to North direction)
+								&sat_y_rad//Y is FOV vertical axis with direction towards North (Up is North)
+							);
 
-						fprintf(FFout, "%s\n", txt_line);
+							//add result
+							double time_s = (MJD - MJD_start_UTC) * 86400.;
+							sprintf_s(txt_line, "%s", "");
+							sprintf_s(txt_line, "%.6lf\t%d\t%.1lf\t%.6lf\t%.6lf\t%.6lf",
+								time_s,
+								tle[iSat].NORAD,
+								sat_mag,
+								distance_rad * rad2deg,
+								sat_x_rad * rad2deg,
+								sat_y_rad * rad2deg
+							);
 
+							fprintf(FFout, "%s\n", txt_line);
+						}
+
+						if (iStep % save_step == 0) //czml record
+						{
+							if (sat_mag <= scale_RSO_apparent_mag_max)//satellite brighter than this limit
+							{
+								point_MJD.push_back(MJD);
+								point_az_rad.push_back(sat_TCS_rad.az);
+								point_el_rad.push_back(sat_TCS_rad.el);
+								point_altitude_m.push_back(sat_altitude_m);
+								point_magnitude.push_back(sat_mag);
+							}
+							else //satellite too dimm, break the pass and save collected points
+								czml_add_pass(FFout_czml, &tle[iSat], &point_MJD, &point_az_rad, &point_el_rad, &point_altitude_m, &point_magnitude, scale_RSO_apparent_mag_max, scale_RSO_apparent_mag_min, &ipoint_counter);
+						}
 					}
 				}
+				else //satellite eclipsed, break the pass and save collected points
+					czml_add_pass(FFout_czml, &tle[iSat], &point_MJD, &point_az_rad, &point_el_rad, &point_altitude_m, &point_magnitude, scale_RSO_apparent_mag_max, scale_RSO_apparent_mag_min, &ipoint_counter);
 			}
-		}
-	}
+			else //satellite under horizon, break the pass and save collected points
+				czml_add_pass(FFout_czml, &tle[iSat], &point_MJD, &point_az_rad, &point_el_rad, &point_altitude_m, &point_magnitude, scale_RSO_apparent_mag_max, scale_RSO_apparent_mag_min, &ipoint_counter);
+
+			iStep++;
+		}//MJD
+
+		//anything left to save?
+		czml_add_pass(FFout_czml, &tle[iSat], &point_MJD, &point_az_rad, &point_el_rad, &point_altitude_m, &point_magnitude, scale_RSO_apparent_mag_max, scale_RSO_apparent_mag_min, &ipoint_counter);
+
+		point_MJD.resize(0);
+		point_az_rad.resize(0);
+		point_el_rad.resize(0);
+		point_altitude_m.resize(0);
+		point_magnitude.resize(0);
+
+	}//satellite loop
 
 	fclose(FFout);
 	tle.resize(0);
+
+	fprintf(FFout_czml, "]\n");
+	fclose(FFout_czml);
+
 	return 0;
 
 }
-
+//------------------------------------------------------------------------------
 void read_TLE_catalogue(
-	char *TLE_filepath,
+	std::string TLE_filepath,
 	std::vector <str_tle> *tle
 )
 {
@@ -530,7 +657,7 @@ void read_TLE_catalogue(
 		sprintf_s(L1, "%s", "");
 		sprintf_s(L2, "%s", "");
 
-		err = fopen_s(&FFin, TLE_filepath, "r");
+		err = fopen_s(&FFin, TLE_filepath.c_str(), "r");
 
 		int lines = 0;
 
@@ -579,7 +706,7 @@ void read_TLE_catalogue(
 		fclose(FFin);
 	}
 }
-
+//------------------------------------------------------------------------------
 void read_TLE(
 	char *TLE_line1,//in
 	char *TLE_line2,//in
@@ -739,7 +866,7 @@ void read_TLE(
 	(*tle).no = no;
 
 }
-
+//------------------------------------------------------------------------------
 double MJD_full_DoY1_d(
 	int year,//2006
 	double doy1//day of year starting from 1, Jan 1=1doy
@@ -754,7 +881,7 @@ double MJD_full_DoY1_d(
 	double Full_MJD = MJD_full(year, month, day, Hour, Minute, Second);
 	return Full_MJD;
 }
-
+//------------------------------------------------------------------------------
 void date_from_year_and_doy1(//doy1=day of year starting from 1, Jan 1=1doy
 	int year,
 	int doy1,
@@ -781,7 +908,7 @@ void date_from_year_and_doy1(//doy1=day of year starting from 1, Jan 1=1doy
 	else
 		*day = doy1;
 }
-
+//------------------------------------------------------------------------------
 long double MJD_full(
 	int year,//2006
 	int month,
@@ -799,8 +926,7 @@ long double MJD_full(
 		(double(hour * 3600 + minute * 60) + second) / 86400.;
 	return result;
 }
-
-
+//------------------------------------------------------------------------------
 int sgp4_satrec_init(
 	str_tle *tle,//in
 	elsetrec *satrec//out
@@ -2536,7 +2662,7 @@ double gstime(double jdut1)
 
 	return temp;
 }  // end gstime
-
+//------------------------------------------------------------------------------
 double atan2_check(double y, double x)
 {
 	double Result_rad = 0.;
@@ -2791,8 +2917,7 @@ void dspace
 
 	//#include "debug4.cpp"
 }  // end dsspace
-
-
+//------------------------------------------------------------------------------
 double GAST_rad(double MJD)
 {
 	//GAST/sideral time, increases over time
@@ -2803,7 +2928,7 @@ double GAST_rad(double MJD)
 	Result = modfl(Parameter_1, &Parameter_2)*pi2;
 	return Result;//rad
 }
-
+//------------------------------------------------------------------------------
 v33 rz(double Angle_rad)
 {
 	double s = sin(Angle_rad);
@@ -2814,7 +2939,7 @@ v33 rz(double Angle_rad)
 	out.v[2][0] = 0.0;  out.v[2][1] = 0.0;  out.v[2][2] = 1.0;
 	return out;
 }
-
+//------------------------------------------------------------------------------
 v33 ry(double Angle_rad)
 {	
 	double s = sin(Angle_rad);
@@ -2825,7 +2950,7 @@ v33 ry(double Angle_rad)
 	out.v[2][0] = s;  out.v[2][1] = 0.0;  out.v[2][2] = c;
 	return out;
 }
-
+//------------------------------------------------------------------------------
 ae topo_AzEl_rad(//topocentric
 	v3 StaTCSm,
 	ae StaTCSrad,
@@ -2842,7 +2967,7 @@ ae topo_AzEl_rad(//topocentric
 	ae Out_rad = get_ae(out);
 	return Out_rad;
 }
-
+//------------------------------------------------------------------------------
 ae get_ae(v3 v)
 {
 	ae Vrad;
@@ -2879,7 +3004,7 @@ ae get_ae(v3 v)
 	}
 	return Vrad;
 }
-
+//------------------------------------------------------------------------------
 double IArad(v3 A, v3 B)
 {
 	//the angle between two vectors is given by acos of the dot product of the two (normalised) vectors
@@ -2887,7 +3012,7 @@ double IArad(v3 A, v3 B)
 	v3 Buv = normalize(B);
 	return acos(dot(Auv, Buv));
 }
-
+//------------------------------------------------------------------------------
 v3 normalize(v3 v)//returns unit vector
 {
 	v3 Out = v;
@@ -2900,18 +3025,18 @@ v3 normalize(v3 v)//returns unit vector
 	}
 	return Out;
 }
-
+//------------------------------------------------------------------------------
 double norm(v3 v)//returns vector length
 {
 	return std::pow(v.x*v.x + v.y*v.y + v.z*v.z, 0.5);
 }
-
+//------------------------------------------------------------------------------
 double dot(v3 left, v3 right)
 {
 	double Sum = left.x*right.x + left.y*right.y + left.z*right.z;
 	return Sum;
 }
-
+//------------------------------------------------------------------------------
 v3 get_v3(ae Vrad)//get unit vector at this orientation
 {
 	double Radius_XY = fabs(cos(Vrad.el));
@@ -2921,7 +3046,7 @@ v3 get_v3(ae Vrad)//get unit vector at this orientation
 	Out.z = sin(Vrad.el);
 	return Out;
 }
-
+//------------------------------------------------------------------------------
 ae Sun_ICS_rad(double MJD)
 {
 	double JD = MJD + 2400000.5;
@@ -2938,7 +3063,7 @@ ae Sun_ICS_rad(double MJD)
 
 	return ICSrad;
 }
-
+//------------------------------------------------------------------------------
 double Distance_to_the_SUN_AU(double MJD)
 {
 	//astronomical algorithms, chapter 24, solar coordinates
@@ -2960,7 +3085,7 @@ double Distance_to_the_SUN_AU(double MJD)
 		Distance = Numerator / Denominator;
 	return Distance;
 }
-
+//------------------------------------------------------------------------------
 v3 get_v3(ae Vrad, double Length)
 {
 	double Radius_XY = fabs(cos(Vrad.el));
@@ -2970,7 +3095,7 @@ v3 get_v3(ae Vrad, double Length)
 	Out.z = Length * sin(Vrad.el);
 	return Out;
 }
-
+//------------------------------------------------------------------------------
 double shadow_function(double MJD, v3 Sat_ICS_m, v3 Sun_ICS_m)
 {	
 	double Out_ShadowFunction = 0.;
@@ -3016,7 +3141,7 @@ double shadow_function(double MJD, v3 Sat_ICS_m, v3 Sun_ICS_m)
 
 	return Out_ShadowFunction;
 }
-
+//------------------------------------------------------------------------------
 double sat_apparent_magnitude(
 	v3 station_ICS_m,
 	v3 sat_ICS_m,	
@@ -3057,7 +3182,7 @@ double sat_apparent_magnitude(
 
 	return sat_apparent_mag;
 }
-
+//------------------------------------------------------------------------------
 v33 inv(v33 M)//inverse of 3x3 matrix
 {
 	v33 A;
@@ -3099,7 +3224,7 @@ v33 inv(v33 M)//inverse of 3x3 matrix
 	}
 	return A;
 }
-
+//------------------------------------------------------------------------------
 double det(v33 M)
 {
 	//calculate determinant of 3x3 matrix	
@@ -3113,7 +3238,7 @@ double det(v33 M)
 
 	return D;
 }
-
+//------------------------------------------------------------------------------
 void sat_position_wrt_FOV_axis(
 	double FOV_topo_az_rad,//topocentric orientation of FOV axis, azimuth
 	double FOV_topo_el_rad,//topocentric orientation of FOV axis, elevaton
@@ -3152,4 +3277,243 @@ void sat_position_wrt_FOV_axis(
 	*x_rad = radius * cosf(rso_rad2_az);//max is +-fov_radius_rad
 	*y_rad = radius * sinf(rso_rad2_az);//max is +-fov_radius_rad
 }
+//------------------------------------------------------------------------------
+void czml_line(
+	FILE* FFout,
+	double MJD0,
+	float az0_rad,
+	float el0_rad,
+	float altitude0_m,
+	double MJD1,
+	float az1_rad,
+	float el1_rad,
+	float altitude1_m,
+	std::string name,
+	float w01,
+	int point_ID,
+	int pixelsize
+)
+{
+	int colR = 255, colG = 255, colB = 255;
+	int colA = 230;// 255;// 128;
+	double ScaleMax = 1.;
+	double ScaleMin = 0.;
+	double ZeroLevel = 0.;
+	double Unit = 1.;
+	double dy = ScaleMax - ScaleMin;
 
+	float az0_deg = az0_rad * rad2deg;
+	float el0_deg = el0_rad * rad2deg;
+	float az1_deg = az1_rad * rad2deg;
+	float el1_deg = el1_rad * rad2deg;
+
+	if ((dy != 0.) && (Unit != 0.))
+	{
+		float value01 = w01;
+		if (value01 < 0.)
+			value01 = 0.;
+		else if (value01 > 1.)
+			value01 = 1.;
+
+		v3 Col_xyz = GiveColorScale_RGB(ScaleMin, ScaleMax, value01);
+
+		colR = int(Col_xyz.x * 255.);
+		colG = int(Col_xyz.y * 255.);
+		colB = int(Col_xyz.z * 255.);
+	}
+
+	fprintf(FFout, ",{\"id\":\"#%d\",", point_ID);
+
+	if (name != "")
+		fprintf(FFout, "\"name\":\"%s\",", name.c_str());
+	else
+		fprintf(FFout, "\"name\":\"az %.3f, el %.3f\",", az0_deg, el0_deg);
+
+	if ((MJD0 > 30000.) && (MJD1 >= MJD0))
+	{
+		std::string timestamp0 = timestamp_UTC_1ms(MJD0);
+		std::string timestamp1 = timestamp_UTC_1ms(MJD1);
+		double dt_s = (MJD1 - MJD0) * 86400.;
+		//altitude wrt Earth surface
+
+		fprintf(FFout, "\"availability\": \"%s/%s\",", timestamp0.c_str(), timestamp1.c_str());
+		fprintf(FFout, "\"position\":{");
+		fprintf(FFout, "\"interpolationAlgorithm\":\"LINEAR\",");
+		fprintf(FFout, "\"interpolationDegree\":\"1\",");
+		fprintf(FFout, "\"epoch\":\"%s\",", timestamp0.c_str());
+		fprintf(FFout, "\"cartographicDegrees\":[");
+		fprintf(FFout, "%.3lf,%.3lf,%.3lf,%.0lf,", 0., az0_deg, el0_deg, altitude0_m);
+		fprintf(FFout, "%.3lf,%.3lf,%.3lf,%.0lf", dt_s, az1_deg, el1_deg, altitude1_m);
+		fprintf(FFout, "]},");
+		fprintf(FFout, "\"point\":{\"color\":{\"rgba\":[%d,%d,%d,%d]},", colR, colG, colB, colA);
+		fprintf(FFout, "\"pixelSize\":%d}}\n", pixelsize);
+	}
+}
+//------------------------------------------------------------------------------
+v3 GiveColorScale_RGB(float ScaleMin, float ScaleMax, float Value)// color scale, returns unit vector
+{
+	v3 Out;
+	Out.x = 0.;
+	Out.y = 0.;
+	Out.z = 0.;
+
+	float V0 = 0.;
+	float dV = ScaleMax - ScaleMin;
+
+	if ((Value >= ScaleMin) && (Value <= ScaleMax) && (dV != 0.))
+	{
+		V0 = (Value - ScaleMin) / dV;
+	}
+	else if (Value < ScaleMin)
+	{
+		V0 = 0.;
+	}
+	else if (Value > ScaleMax)
+	{
+		V0 = 1.;
+	}
+
+	//red
+	if (V0 < 0.50) Out.x = 0.; else
+		if (V0 < 0.75) Out.x = 4. * V0 - 2.; else
+			Out.x = 1.;
+
+	//green
+	if (V0 < 0.25) Out.y = 4. * V0; else
+		if (V0 < 0.75) Out.y = 1.; else
+			Out.y = -4. * V0 + 4.;
+
+	//blue
+	if (V0 < 0.25) Out.z = 1.; else
+		if (V0 < 0.50) Out.z = -4. * V0 + 2.; else
+			Out.z = 0.;
+
+	return Out;
+}
+//------------------------------------------------------------------------------
+std::string timestamp_UTC_1ms(double MJD)
+{
+	char txttime[MAXBUF];
+	sprintf_s(txttime, "%s", "");
+
+	int year0, month0, day0, hour0, minute0, isec;
+	double sec_fraction;
+	date_and_time_from_MJD(MJD, &year0, &month0, &day0, &hour0, &minute0, &isec, &sec_fraction);
+	double sec = double(isec) + sec_fraction;
+
+	sprintf_s(txttime, "%04d-%02d-%02dT%02d:%02d:%06.3lfZ", year0, month0, day0, hour0, minute0, sec);
+	return std::string(txttime);
+}
+//------------------------------------------------------------------------------
+void date_and_time_from_MJD(
+	double MJD,
+	int* year,
+	int* month,
+	int* day,
+	int* hour,
+	int* minute,
+	int* isec,
+	double* sec_fraction
+)
+{
+	long int st = 678881L;
+	long int st1 = 146097L;
+	long int a = 4L * (int(MJD) + st) + 3L;
+	long int b = 0.;
+	if (st1 != 0.)
+		b = a / st1;
+	else
+		b = 0.;//error
+	long int c = a - b * st1;
+	long int f = 4 * (c / 4) + 3;
+	c = f / 1461;
+	f = (f - c * 1461 + 4) / 4;
+	long int e = f * 5 - 3;
+	*year = (int)(b * 100 + c);
+	*day = (int)((e - (e / 153) * 153 + 5) / 5);
+	*month = (int)(e / 153 + 3);
+	if (*month > 12)
+	{
+		*month -= 12;
+		++* year;
+	}
+
+
+	double time = (MJD - int(MJD)) * 86400.;
+	*hour = int(time) / 3600;
+	*minute = (int(time) - *hour * 3600) / 60;
+	double dsec = time - double(*hour * 3600) - double(*minute * 60);
+	*isec = int(dsec);
+	*sec_fraction = dsec - double(*isec);
+}
+//------------------------------------------------------------------------------
+void czml_add_pass(
+	FILE* FFout,
+	str_tle* tle,
+	std::vector <double>* point_MJD,
+	std::vector <double>* point_az_rad,
+	std::vector <double>* point_el_rad,
+	std::vector <double>* point_altitude_m,
+	std::vector <double>* point_magnitude,
+	double scale_RSO_apparent_mag_max,
+	double scale_RSO_apparent_mag_min,
+	int* ipoint_counter
+)
+{
+	if ((*point_MJD).size() > 1)
+	{
+		int pixelsize = 5;
+		int points_per_pass = 10;
+		double scale_RSO_apparent_mag_range = scale_RSO_apparent_mag_max - scale_RSO_apparent_mag_min;
+
+		int iStep = int((*point_MJD).size() / points_per_pass)+1;
+
+		double prev_MJD = 0.;
+		double prev_az_rad = 0.;
+		double prev_el_rad = 0.;
+		double prev_altitude_m = 0.;
+		char name_char[200];
+
+		for (int i = 0; i < (*point_MJD).size(); i += iStep)
+			if (i < (*point_MJD).size())
+			{
+
+				//visual magnitude, reversed scale for color
+				double value01 = (scale_RSO_apparent_mag_max - (*point_magnitude)[i]) / scale_RSO_apparent_mag_range;
+				if (value01 < 0.)
+					value01 = 0.;
+				else if (value01 > 1.)
+					value01 = 1.;
+
+				if (prev_MJD > 30000.)
+				{
+					sprintf_s(name_char, "NORAD %d, %s, mag %.1lf", (*tle).NORAD, (*tle).intldesg, (*point_magnitude)[i]);
+
+					//two points for line interpolation
+					czml_line(
+						FFout,
+						prev_MJD, prev_az_rad, prev_el_rad, prev_altitude_m,//start point
+						(*point_MJD)[i], (*point_az_rad)[i], (*point_el_rad)[i], (*point_altitude_m)[i],//end point
+						name_char,
+						value01,//normalized color
+						*ipoint_counter,//record ID
+						pixelsize
+					);
+
+					(*ipoint_counter)++;
+				}
+
+				prev_MJD = (*point_MJD)[i];
+				prev_az_rad = (*point_az_rad)[i];
+				prev_el_rad = (*point_el_rad)[i];
+				prev_altitude_m = (*point_altitude_m)[i];
+			}
+
+	}
+
+	(*point_MJD).resize(0);
+	(*point_az_rad).resize(0);
+	(*point_el_rad).resize(0);
+	(*point_altitude_m).resize(0);
+	(*point_magnitude).resize(0);
+}
